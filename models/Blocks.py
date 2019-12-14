@@ -10,13 +10,33 @@
 import torch.nn as nn
 
 
+class Layer(nn.Module):
+    """
+    Single convolution layer with all the bells and whistles.
+    """
+
+    def __init__(self):
+        super(Layer, self).__init__()
+
+    def forward(self, x):
+        return x
+
+
+class InputBlock(nn.Module):
+    def __init__(self):
+        super(InputBlock, self).__init__()
+
+    def forward(self, x):
+        pass
+
+
 class GSynthesisBlock(nn.Module):
+    """
+    Building blocks for main layers
+    """
+
     def __init__(self):
         super(GSynthesisBlock, self).__init__()
 
     def forward(self, x, dlatents_in_range):
-        x = self.conv0_up(x)
-        x = self.epi1(x, dlatents_in_range[:, 0])
-        x = self.conv1(x)
-        x = self.epi2(x, dlatents_in_range[:, 1])
         return x
