@@ -82,7 +82,7 @@ class Generator(nn.Module):
         """
         super(Generator, self).__init__()
 
-    def forward(self, latents_in, labels_in):
+    def forward(self, latents_in, labels_in=None):
         """
 
         Args:
