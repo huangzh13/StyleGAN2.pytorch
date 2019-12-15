@@ -7,7 +7,11 @@
 -------------------------------------------------
 """
 
+import numpy as np
+
 import torch.nn as nn
+
+from .Blocks import GSynthesisBlock, InputBlock
 
 
 class GMapping(nn.Module):
@@ -45,12 +49,26 @@ class GSynthesis(nn.Module):
         """
 
         super(GSynthesis, self).__init__()
+
+        resolution_log2 = int(np.log2(resolution))
+        assert resolution == 2 ** resolution_log2 and resolution >= 4
+        assert architecture in ['orig', 'skip', 'resnet']
+        act, gain = {'relu': (nn.ReLU(), np.sqrt(2)),
+                     'lrelu': (nn.LeakyReLU(negative_slope=0.2), np.sqrt(2))}[nonlinearity]
+
+        def nf(stage):
+            return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
+
         if resample_kernel is None:
             resample_kernel = [1, 3, 3, 1]
 
         # Early layers
+        self.init_block = InputBlock(fmaps=nf(1))
 
         # Main layers
+        blocks = []
+        for res in range(3, resolution_log2 + 1):
+            blocks.append(GSynthesisBlock(res=res, fmaps=nf(res - 1)))
 
     def forward(self, dlatents_in):
         """
@@ -66,8 +84,7 @@ class GSynthesis(nn.Module):
 
 class Generator(nn.Module):
     def __init__(self, truncation_psi=0.5, truncation_cutoff=None, truncation_psi_val=None,
-                 truncation_cutoff_val=None, dlatent_avg_beta=0.995, style_mixing_prob=0.9,
-                 return_dlatents=False, **_kwargs):
+                 truncation_cutoff_val=None, dlatent_avg_beta=0.995, style_mixing_prob=0.9, **_kwargs):
         """
 
         Args:
@@ -77,22 +94,31 @@ class Generator(nn.Module):
             truncation_cutoff_val: Value for truncation_cutoff to use during validation.
             dlatent_avg_beta: Decay for tracking the moving average of W during training. None = disable.
             style_mixing_prob: Probability of mixing styles during training. None = disable.
-            return_dlatents: Return dlatents in addition to the images?
             **_kwargs: Arguments for sub-networks (mapping and synthesis). ):
         """
         super(Generator, self).__init__()
 
-    def forward(self, latents_in, labels_in=None):
+        self.g_mapping = GMapping(latent_size, dlatent_size, dlatent_broadcast=self.num_layers, **_kwargs)
+        self.g_synthesis = GSynthesis(resolution=resolution, **_kwargs)
+
+    def forward(self, latents_in, labels_in=None, return_dlatents=False):
         """
 
         Args:
             latents_in: First input: Latent vectors (Z) [minibatch, latent_size].
             labels_in: Second input: Conditioning labels [minibatch, label_size].)
+            return_dlatents: Return dlatents in addition to the images?
 
         Returns:
 
         """
-        pass
+        dlatents_in = self.g_mapping(latents_in)
+        # TODO
+        images_out = self.g_synthesis(dlatents_in)
+
+        if return_dlatents:
+            return images_out, dlatents_in
+        return images_out
 
 
 class Discriminator(nn.Module):
@@ -137,3 +163,7 @@ class Discriminator(nn.Module):
 class StyleGAN2:
     def __init__(self):
         pass
+
+
+if __name__ == '__main__':
+    gen = Generator()
