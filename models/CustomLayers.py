@@ -7,9 +7,29 @@
 -------------------------------------------------
 """
 
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def apply_bias_act(x, b, act='lrelu', gain=None, lrmul=1):
+    act_layer, def_gain = {'relu': (torch.relu, np.sqrt(2)),
+                           'lrelu': (nn.LeakyReLU(negative_slope=0.2), np.sqrt(2))}[act]
+
+    b = b * lrmul
+    # Add bias
+    x += b.view(1, -1, 1, 1)
+    # Evaluate activation function.
+    x = act_layer(x)
+    # Scale by gain.
+    if gain is None:
+        gain = def_gain
+    if gain != 1:
+        x *= gain
+
+    return x
 
 
 def upscale2d(x, factor=2, gain=1):
@@ -56,7 +76,6 @@ class EqualizedLinear(nn.Module):
     def __init__(self, input_size, output_size, gain=1., use_wscale=True, lrmul=1.):
         super().__init__()
         he_std = gain * input_size ** (-0.5)  # He init
-
         # Equalized learning rate and custom learning rate multiplier.
         if use_wscale:
             init_std = 1.0 / lrmul
@@ -71,7 +90,7 @@ class EqualizedLinear(nn.Module):
 
 
 class EqualizedModConv2d(nn.Module):
-    def __init__(self, input_channels, output_channels, kernel, up=False, down=False, demodulate=True,
+    def __init__(self, dlatent_size, input_channels, output_channels, kernel, up=False, down=False, demodulate=True,
                  gain=1, use_wscale=True, lrmul=1, fused_modconv=True, resample_kernel=None):
         """
         """
@@ -85,9 +104,10 @@ class EqualizedModConv2d(nn.Module):
         self.down = down
         self.fused_modconv = fused_modconv
         self.demodulate = demodulate
+        self.fmaps = output_channels
 
-        self.dense = EqualizedLinear()
-        self.bias_act = None
+        self.dense = EqualizedLinear(input_size=dlatent_size, output_size=input_channels)
+        self.bias = nn.Parameter(torch.ones(input_channels), requires_grad=True)
 
         he_std = self.gain * (input_channels * kernel ** 2) ** (-0.5)  # He init
         if use_wscale:
@@ -101,37 +121,40 @@ class EqualizedModConv2d(nn.Module):
 
     def forward(self, x, y):
         # Get weight.
-        ww = None  # [BkkIO] Introduce minibatch dimension.
+        w = self.weight
+        ww = self.weight.unsqueeze(0)  # [BkkIO] Introduce minibatch dimension.
 
         # Modulate
         s = self.dense(y)  # [BI] Transform incoming W to style.
-        s = self.bias_act(s)  # [BI] Add bias (initially 1).
-        ww *= s  # [BkkIO] Scale input feature maps.
+        s = apply_bias_act(s, b=self.bias)  # [BI] Add bias (initially 1).
+        ww *= s.expand(-1, 1, 1, -1, 1)  # [BkkIO] Scale input feature maps.
 
         # Demodulate
         if self.demodulate:
-            d = None  # [BO] Scaling factor.
-            ww *= d  # [BkkIO] Scale output feature maps.
+            d = torch.rsqrt(torch.sum(ww ** 2, dim=[1, 2, 3]) + 1e-8)  # [BO] Scaling factor.
+            ww *= d.expand(-1, 1, 1, 1, -1)  # [BkkIO] Scale output feature maps.
 
         # Reshape/scale input
         if self.fused_modconv:
-            x = x  # Fused => reshape minibatch to convolution groups.
-            w = ww
+            x = x.view(1, -1, x.size(2), x.size(3))  # Fused => reshape minibatch to convolution groups.
+            size = ww.size()
+            w = ww.permute(1, 2, 3, 0, 4).view(size[1], size[2], size[3], -1)
         else:
-            x *= s  # [BIhw] Not fused => scale input activations.
+            x *= s.expand(-1, -1, 1, 1)  # [BIhw] Not fused => scale input activations.
 
         # Convolution with optional up/down sampling
         if self.up:
-            x = upsample_conv_2d(x, self.weight)
+            x = upsample_conv_2d(x, w)
         elif self.down:
-            x = conv_downsample_2d(x, self.weight)
+            x = conv_downsample_2d(x, w)
         else:
-            x = F.conv2d(x, self.weight)
+            x = F.conv2d(x, w)
 
         # Reshape/scale output
         if self.fused_modconv:
-            x = x  # Fused => reshape convolution groups back to minibatch.
+            # Fused => reshape convolution groups back to minibatch.
+            x = x.view(-1, self.fmaps, x.size()[2], x.size()[3])
         elif self.demodulate:
-            x *= d  # [BOhw] Not fused => scale output activations.
+            x *= d.expand(-1, -1, 1, 1)  # [BOhw] Not fused => scale output activations.
 
         return x
