@@ -20,7 +20,7 @@ def apply_bias_act(x, b, act='lrelu', gain=None, lrmul=1):
 
     b = b * lrmul
     # Add bias
-    x += b.view(1, -1, 1, 1)
+    x += b
     # Evaluate activation function.
     x = act_layer(x)
     # Scale by gain.
@@ -62,7 +62,9 @@ def downscale2d(x, factor=2, gain=1):
     return F.avg_pool2d(x, factor)
 
 
-def upsample_conv_2d(x, w):
+def upsample_conv_2d(x, w, groups):
+    x = upscale2d(x)
+    x = F.conv2d(x, w, stride=1, padding=w.shape[-1] // 2, groups=groups)
     return x
 
 
@@ -99,7 +101,7 @@ class EqualizedModConv2d(nn.Module):
         assert not (up and down)
         assert kernel >= 1 and kernel % 2 == 1
 
-        self.gain = gain
+        # self.gain = gain
         self.up = up
         self.down = down
         self.fused_modconv = fused_modconv
@@ -109,7 +111,7 @@ class EqualizedModConv2d(nn.Module):
         self.dense = EqualizedLinear(input_size=dlatent_size, output_size=input_channels)
         self.bias = nn.Parameter(torch.ones(input_channels), requires_grad=True)
 
-        he_std = self.gain * (input_channels * kernel ** 2) ** (-0.5)  # He init
+        he_std = gain * (input_channels * kernel ** 2) ** (-0.5)  # He init
         if use_wscale:
             init_std = 1.0 / lrmul
             self.w_mul = he_std * lrmul
@@ -122,39 +124,55 @@ class EqualizedModConv2d(nn.Module):
     def forward(self, x, y):
         # Get weight.
         w = self.weight
-        ww = self.weight.unsqueeze(0)  # [BkkIO] Introduce minibatch dimension.
+        ww = self.weight.repeat(x.shape[0], 1, 1, 1, 1)  # [BOIkk] Introduce minibatch dimension.
 
         # Modulate
         s = self.dense(y)  # [BI] Transform incoming W to style.
         s = apply_bias_act(s, b=self.bias)  # [BI] Add bias (initially 1).
-        ww *= s.expand(-1, 1, 1, -1, 1)  # [BkkIO] Scale input feature maps.
+        ww *= s.view(-1, 1, s.shape[1], 1, 1)  # [BOIkk] Scale input feature maps.
 
         # Demodulate
         if self.demodulate:
-            d = torch.rsqrt(torch.sum(ww ** 2, dim=[1, 2, 3]) + 1e-8)  # [BO] Scaling factor.
-            ww *= d.expand(-1, 1, 1, 1, -1)  # [BkkIO] Scale output feature maps.
+            d = torch.rsqrt(torch.sum(ww ** 2, dim=[2, 3, 4]) + 1e-8)  # [BO] Scaling factor.
+            ww *= d.view(-1, d.shape[1], 1, 1, 1)  # [BOIkk] Scale output feature maps.
 
         # Reshape/scale input
+        groups = x.shape[0]
         if self.fused_modconv:
-            x = x.view(1, -1, x.size(2), x.size(3))  # Fused => reshape minibatch to convolution groups.
-            size = ww.size()
-            w = ww.permute(1, 2, 3, 0, 4).view(size[1], size[2], size[3], -1)
+            x = x.view(1, -1, x.shape[2], x.shape[3])  # Fused => reshape minibatch to convolution groups.
+            size = ww.shape
+            w = ww.view(-1, size[2], size[3], size[4])
         else:
+            # TODO
             x *= s.expand(-1, -1, 1, 1)  # [BIhw] Not fused => scale input activations.
 
         # Convolution with optional up/down sampling
         if self.up:
-            x = upsample_conv_2d(x, w)
+            x = upsample_conv_2d(x, w, groups)
         elif self.down:
             x = conv_downsample_2d(x, w)
         else:
-            x = F.conv2d(x, w)
+            x = F.conv2d(x, w, stride=1, padding=w.shape[-1] // 2, groups=groups)
 
         # Reshape/scale output
         if self.fused_modconv:
             # Fused => reshape convolution groups back to minibatch.
-            x = x.view(-1, self.fmaps, x.size()[2], x.size()[3])
+            x = x.view(-1, self.fmaps, x.shape[2], x.shape[3])
         elif self.demodulate:
+            # TODO
             x *= d.expand(-1, -1, 1, 1)  # [BOhw] Not fused => scale output activations.
 
         return x
+
+
+if __name__ == '__main__':
+    conv_up = EqualizedModConv2d(dlatent_size=512, input_channels=512, output_channels=512, kernel=3, up=True)
+    conv = EqualizedModConv2d(dlatent_size=512, input_channels=512, output_channels=512, kernel=3)
+
+    fmaps = torch.randn(4, 512, 8, 8)
+    dlatents_in = torch.randn(4, 512)
+
+    print(conv_up(fmaps, dlatents_in).shape)
+    print(conv(fmaps, dlatents_in).shape)
+
+    print('Done.')
