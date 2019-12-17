@@ -20,7 +20,10 @@ def apply_bias_act(x, b, act='lrelu', gain=None, lrmul=1):
 
     b = b * lrmul
     # Add bias
-    x += b
+    if len(x.shape) == 4:
+        x += b.view(1, -1, 1, 1)
+    else:
+        x += b.view(1, -1)
     # Evaluate activation function.
     x = act_layer(x)
     # Scale by gain.
@@ -63,8 +66,9 @@ def downscale2d(x, factor=2, gain=1):
 
 
 def upsample_conv_2d(x, w, groups):
-    x = upscale2d(x)
-    x = F.conv2d(x, w, stride=1, padding=w.shape[-1] // 2, groups=groups)
+    # x = upscale2d(x)
+    # w = w.permute(1, 0, 2, 3)
+    x = F.conv_transpose2d(x, w, stride=2, padding=w.shape[-1] // 2, output_padding=1, groups=groups)
     return x
 
 
@@ -92,8 +96,9 @@ class EqualizedLinear(nn.Module):
 
 
 class EqualizedModConv2d(nn.Module):
-    def __init__(self, dlatent_size, input_channels, output_channels, kernel, up=False, down=False, demodulate=True,
-                 gain=1, use_wscale=True, lrmul=1, fused_modconv=True, resample_kernel=None):
+    def __init__(self, dlatent_size, input_channels, output_channels, kernel,
+                 up=False, down=False, demodulate=True, fused_modconv=True,
+                 gain=1, use_wscale=True, lrmul=1, resample_kernel=None):
         """
         """
         super(EqualizedModConv2d, self).__init__()
@@ -108,7 +113,7 @@ class EqualizedModConv2d(nn.Module):
         self.demodulate = demodulate
         self.fmaps = output_channels
 
-        self.dense = EqualizedLinear(input_size=dlatent_size, output_size=input_channels)
+        self.mod_layer = EqualizedLinear(input_size=dlatent_size, output_size=input_channels)
         self.bias = nn.Parameter(torch.ones(input_channels), requires_grad=True)
 
         he_std = gain * (input_channels * kernel ** 2) ** (-0.5)  # He init
@@ -118,6 +123,7 @@ class EqualizedModConv2d(nn.Module):
         else:
             init_std = he_std / lrmul
             self.w_mul = lrmul
+
         self.weight = torch.nn.Parameter(
             torch.randn(output_channels, input_channels, kernel, kernel) * init_std, requires_grad=True)
 
@@ -127,7 +133,7 @@ class EqualizedModConv2d(nn.Module):
         ww = self.weight.repeat(x.shape[0], 1, 1, 1, 1)  # [BOIkk] Introduce minibatch dimension.
 
         # Modulate
-        s = self.dense(y)  # [BI] Transform incoming W to style.
+        s = self.mod_layer(y)  # [BI] Transform incoming W to style.
         s = apply_bias_act(s, b=self.bias)  # [BI] Add bias (initially 1).
         ww *= s.view(-1, 1, s.shape[1], 1, 1)  # [BOIkk] Scale input feature maps.
 
@@ -141,7 +147,7 @@ class EqualizedModConv2d(nn.Module):
         if self.fused_modconv:
             x = x.view(1, -1, x.shape[2], x.shape[3])  # Fused => reshape minibatch to convolution groups.
             size = ww.shape
-            w = ww.view(-1, size[2], size[3], size[4])
+            w = ww.transpose(1, 2).contiguous().view(-1, size[1], size[3], size[4])
         else:
             # TODO
             x *= s.expand(-1, -1, 1, 1)  # [BIhw] Not fused => scale input activations.

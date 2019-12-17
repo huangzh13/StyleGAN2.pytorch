@@ -9,9 +9,10 @@
 
 import numpy as np
 
+import torch
 import torch.nn as nn
 
-from .Blocks import GSynthesisBlock, InputBlock
+from models.Blocks import GSynthesisBlock, InputBlock
 
 
 class GMapping(nn.Module):
@@ -53,8 +54,9 @@ class GSynthesis(nn.Module):
         resolution_log2 = int(np.log2(resolution))
         assert resolution == 2 ** resolution_log2 and resolution >= 4
         assert architecture in ['orig', 'skip', 'resnet']
-        act, gain = {'relu': (nn.ReLU(), np.sqrt(2)),
-                     'lrelu': (nn.LeakyReLU(negative_slope=0.2), np.sqrt(2))}[nonlinearity]
+
+        self.architecture = architecture
+        self.resolution_log2 = resolution_log2
 
         def nf(stage):
             return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
@@ -63,28 +65,37 @@ class GSynthesis(nn.Module):
             resample_kernel = [1, 3, 3, 1]
 
         # Early layers
-        self.init_block = InputBlock(fmaps=nf(1))
+        self.init_block = InputBlock(dlatent_size=dlatent_size, number_channels=num_channels,
+                                     input_fmaps=nf(1), output_fmaps=nf(1), act=nonlinearity,
+                                     fused_modconv=fused_modconv)
 
         # Main layers
-        blocks = []
-        for res in range(3, resolution_log2 + 1):
-            blocks.append(GSynthesisBlock(res=res, fmaps=nf(res - 1)))
+        blocks = [GSynthesisBlock(dlatent_size=dlatent_size, num_channels=num_channels, res=res,
+                                  input_fmaps=nf(res - 2), output_fmaps=nf(res - 1), act=nonlinearity,
+                                  fused_modconv=fused_modconv)
+                  for res in range(3, resolution_log2 + 1)]
+        self.blocks = nn.ModuleList(blocks)
 
     def forward(self, dlatents_in):
         """
-
         Args:
             dlatents_in: Input: Disentangled latents (W) [minibatch, num_layers, dlatent_size].
 
         Returns:
-
         """
-        pass
+        x, y = self.init_block(dlatents_in)
+
+        for i in range(self.resolution_log2 - 2):
+            x, y = self.blocks[i](x, dlatents_in, y)
+
+        images_out = y
+        return images_out
 
 
 class Generator(nn.Module):
-    def __init__(self, truncation_psi=0.5, truncation_cutoff=None, truncation_psi_val=None,
-                 truncation_cutoff_val=None, dlatent_avg_beta=0.995, style_mixing_prob=0.9, **_kwargs):
+    def __init__(self, truncation_psi=0.5, truncation_cutoff=None,
+                 truncation_psi_val=None, truncation_cutoff_val=None, dlatent_avg_beta=0.995,
+                 style_mixing_prob=0.9, **_kwargs):
         """
 
         Args:
@@ -97,9 +108,6 @@ class Generator(nn.Module):
             **_kwargs: Arguments for sub-networks (mapping and synthesis). ):
         """
         super(Generator, self).__init__()
-
-        self.g_mapping = GMapping(latent_size, dlatent_size, dlatent_broadcast=self.num_layers, **_kwargs)
-        self.g_synthesis = GSynthesis(resolution=resolution, **_kwargs)
 
     def forward(self, latents_in, labels_in=None, return_dlatents=False):
         """
@@ -166,4 +174,10 @@ class StyleGAN2:
 
 
 if __name__ == '__main__':
-    gen = Generator()
+    # gen = Generator()
+    g_synthesis = GSynthesis()
+
+    dlatents_in = torch.randn(4, 18, 512)
+    imgs_out = g_synthesis(dlatents_in)
+
+    print('Done.')
