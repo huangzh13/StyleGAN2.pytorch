@@ -10,7 +10,7 @@
 import torch
 import torch.nn as nn
 
-from .CustomLayers import EqualizedModConv2d, upscale2d, apply_bias_act
+from .CustomLayers import EqualizedLinear, EqualizedModConv2d, upscale2d, apply_bias_act
 
 
 class ModConvLayer(nn.Module):
@@ -46,7 +46,7 @@ class InputBlock(nn.Module):
         self.conv = ModConvLayer(dlatent_size=dlatent_size,
                                  input_channels=input_fmaps,
                                  output_channels=output_fmaps,
-                                 up=True, kernel=3, **_kwargs)
+                                 kernel=3, **_kwargs)
         self.to_rgb = ModConvLayer(dlatent_size=dlatent_size,
                                    input_channels=output_fmaps,
                                    output_channels=number_channels,
@@ -93,3 +93,19 @@ class GSynthesisBlock(nn.Module):
         y = self.to_rgb(x, dlatents_in[:, self.res * 2 - 3]) + y
 
         return x, y
+
+
+class GMappingBlock(nn.Module):
+    def __init__(self, input_size, output_size, lrmul, act):
+        super(GMappingBlock, self).__init__()
+
+        self.lrmul = lrmul
+        self.act = act
+
+        self.linear = EqualizedLinear(input_size, output_size, lrmul=lrmul)
+        self.bias = nn.Parameter(torch.zeros(output_size), requires_grad=True)
+
+    def forward(self, x):
+        x = self.linear(x)
+        x = apply_bias_act(x, self.bias, act=self.act, lrmul=self.lrmul)
+        return x

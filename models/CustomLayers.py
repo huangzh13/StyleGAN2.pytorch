@@ -147,7 +147,10 @@ class EqualizedModConv2d(nn.Module):
         if self.fused_modconv:
             x = x.view(1, -1, x.shape[2], x.shape[3])  # Fused => reshape minibatch to convolution groups.
             size = ww.shape
-            w = ww.transpose(1, 2).contiguous().view(-1, size[1], size[3], size[4])
+            if self.up:
+                w = ww.transpose(1, 2).contiguous().view(-1, size[1], size[3], size[4])
+            else:
+                w = ww.view(-1, size[2], size[3], size[4])
         else:
             # TODO
             x *= s.expand(-1, -1, 1, 1)  # [BIhw] Not fused => scale input activations.

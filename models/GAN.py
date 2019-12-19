@@ -7,20 +7,70 @@
 -------------------------------------------------
 """
 
+from collections import OrderedDict
 import numpy as np
 
 import torch
 import torch.nn as nn
 
-from models.Blocks import GSynthesisBlock, InputBlock
+from models.Blocks import GSynthesisBlock, InputBlock, GMappingBlock
 
 
 class GMapping(nn.Module):
-    def __init__(self):
-        super(GMapping, self).__init__()
 
-    def forward(self, latents_in, labels_in=None):
-        pass
+    def __init__(self, latent_size=512, dlatent_size=512, dlatent_broadcast=None,
+                 mapping_layers=8, mapping_fmaps=512, mapping_lrmul=0.01, mapping_nonlinearity='lrelu',
+                 normalize_latents=True, **_kwargs):
+        """
+        Mapping network used in the StyleGAN paper.
+
+        :param latent_size: Latent vector(Z) dimensionality.
+        # :param label_size: Label dimensionality, 0 if no labels.
+        :param dlatent_size: Disentangled latent (W) dimensionality.
+        :param dlatent_broadcast: Output disentangled latent (W) as [minibatch, dlatent_size]
+                                  or [minibatch, dlatent_broadcast, dlatent_size].
+        :param mapping_layers: Number of mapping layers.
+        :param mapping_fmaps: Number of activations in the mapping layers.
+        :param mapping_lrmul: Learning rate multiplier for the mapping layers.
+        :param mapping_nonlinearity: Activation function: 'relu', 'lrelu'.
+        :param normalize_latents: Normalize latent vectors (Z) before feeding them to the mapping layers?
+        :param _kwargs: Ignore unrecognized keyword args.
+        """
+
+        super().__init__()
+
+        self.latent_size = latent_size
+        self.mapping_fmaps = mapping_fmaps
+        self.dlatent_size = dlatent_size
+        self.dlatent_broadcast = dlatent_broadcast
+        self.normalize_latents = normalize_latents
+
+        # Embed labels and concatenate them with latents.
+        # TODO
+
+        layers = []
+        for layer_idx in range(0, mapping_layers):
+            fmaps_in = self.latent_size if layer_idx == 0 else self.mapping_fmaps
+            fmaps_out = self.dlatent_size if layer_idx == mapping_layers - 1 else self.mapping_fmaps
+            layers.append(
+                ('Dense%d' % layer_idx, GMappingBlock(input_size=fmaps_in, output_size=fmaps_out,
+                                                      lrmul=mapping_lrmul, act=mapping_nonlinearity)))
+
+        # Output.
+        self.map = nn.Sequential(OrderedDict(layers))
+
+    def forward(self, x):
+        # Normalize latents.
+        if self.normalize_latents:
+            x = x * torch.rsqrt(torch.mean(x ** 2, dim=1, keepdim=True) + 1e-8)
+
+        # First input: Latent vectors (Z) [mini_batch, latent_size].
+        x = self.map(x)
+
+        # Broadcast -> batch_size * dlatent_broadcast * dlatent_size
+        if self.dlatent_broadcast is not None:
+            x = x.unsqueeze(1).expand(-1, self.dlatent_broadcast, -1)
+        return x
 
 
 class GSynthesis(nn.Module):
@@ -85,8 +135,8 @@ class GSynthesis(nn.Module):
         """
         x, y = self.init_block(dlatents_in)
 
-        for i in range(self.resolution_log2 - 2):
-            x, y = self.blocks[i](x, dlatents_in, y)
+        for block in self.blocks:
+            x, y = block(x, dlatents_in, y)
 
         images_out = y
         return images_out
@@ -175,9 +225,13 @@ class StyleGAN2:
 
 if __name__ == '__main__':
     # gen = Generator()
-    g_synthesis = GSynthesis()
 
-    dlatents_in = torch.randn(4, 18, 512)
-    imgs_out = g_synthesis(dlatents_in)
+    # g_synthesis = GSynthesis()
+    # test_dlatents_in = torch.randn(4, 18, 512)
+    # test_imgs_out = g_synthesis(test_dlatents_in)
+
+    g_mapping = GMapping()
+    test_latents_in = torch.randn(4, 512)
+    test_dlatents_out = g_mapping(test_latents_in)
 
     print('Done.')
