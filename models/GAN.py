@@ -53,7 +53,7 @@ class GMapping(nn.Module):
             fmaps_in = self.latent_size if layer_idx == 0 else self.mapping_fmaps
             fmaps_out = self.dlatent_size if layer_idx == mapping_layers - 1 else self.mapping_fmaps
             layers.append(
-                ('Dense%d' % layer_idx, GMappingBlock(input_size=fmaps_in, output_size=fmaps_out,
+                ('dense%d' % layer_idx, GMappingBlock(input_size=fmaps_in, output_size=fmaps_out,
                                                       lrmul=mapping_lrmul, act=mapping_nonlinearity)))
 
         # Output.
@@ -143,8 +143,9 @@ class GSynthesis(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, truncation_psi=0.5, truncation_cutoff=None,
-                 truncation_psi_val=None, truncation_cutoff_val=None, dlatent_avg_beta=0.995,
+    def __init__(self, resolution=1024, latent_size=512, dlatent_size=512,
+                 truncation_psi=0.5, truncation_cutoff=None, truncation_psi_val=None,
+                 truncation_cutoff_val=None, dlatent_avg_beta=0.995,
                  style_mixing_prob=0.9, **_kwargs):
         """
 
@@ -158,6 +159,13 @@ class Generator(nn.Module):
             **_kwargs: Arguments for sub-networks (mapping and synthesis). ):
         """
         super(Generator, self).__init__()
+
+        self.style_mixing_prob = style_mixing_prob
+
+        # Setup components.
+        self.num_layers = (int(np.log2(resolution)) - 1) * 2
+        self.g_mapping = GMapping(latent_size, dlatent_size, dlatent_broadcast=self.num_layers, **_kwargs)
+        self.g_synthesis = GSynthesis(resolution=resolution, **_kwargs)
 
     def forward(self, latents_in, labels_in=None, return_dlatents=False):
         """
@@ -224,14 +232,16 @@ class StyleGAN2:
 
 
 if __name__ == '__main__':
-    # gen = Generator()
-
     # g_synthesis = GSynthesis()
     # test_dlatents_in = torch.randn(4, 18, 512)
     # test_imgs_out = g_synthesis(test_dlatents_in)
 
-    g_mapping = GMapping()
+    # g_mapping = GMapping()
+    # test_latents_in = torch.randn(4, 512)
+    # test_dlatents_out = g_mapping(test_latents_in)
+
+    gen = Generator()
     test_latents_in = torch.randn(4, 512)
-    test_dlatents_out = g_mapping(test_latents_in)
+    test_imgs_out = gen(test_latents_in)
 
     print('Done.')
