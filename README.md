@@ -1,1 +1,1 @@
-StyleGAN2.pytorch
+# StyleGAN2.pytorch (Work In Progress)
