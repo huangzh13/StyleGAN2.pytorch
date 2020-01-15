@@ -10,48 +10,73 @@
 import torch
 import torch.nn as nn
 
-from .CustomLayers import EqualizedLinear, EqualizedModConv2d, upscale2d, apply_bias_act
+from models.CustomLayers import EqualizedModConv2d, Upsample
+from models.op import fused_leaky_relu
+
+
+class ToRGB(nn.Module):
+    def __init__(self, dlatent_size, in_channel, num_channels, resample_kernel=None):
+        super(ToRGB, self).__init__()
+
+        if resample_kernel is None:
+            resample_kernel = [1, 3, 3, 1]
+
+        self.upsample = Upsample(resample_kernel)
+        self.conv = EqualizedModConv2d(dlatent_size=dlatent_size, in_channel=in_channel,
+                                       out_channel=num_channels, kernel=1, demodulate=False)
+        self.bias = nn.Parameter(torch.zeros(1, num_channels, 1, 1), requires_grad=True)
+
+    def forward(self, x, dlatents_in_range, y=None):
+        x = self.conv(x, dlatents_in_range)
+        out = x + self.bias  # act='linear'
+
+        if y is not None:  # architecture='skip'
+            y = self.upsample(y)
+            out = out + y
+
+        return out
 
 
 class ModConvLayer(nn.Module):
-    def __init__(self, dlatent_size, input_channels, output_channels, act, use_noise=True, **_kwargs):
+    def __init__(self, dlatent_size, in_channel, out_channel, kernel, up=False, down=False, use_noise=True):
         super(ModConvLayer, self).__init__()
-        self.act = act
 
-        self.mod_conv = EqualizedModConv2d(dlatent_size=dlatent_size,
-                                           input_channels=input_channels,
-                                           output_channels=output_channels,
-                                           **_kwargs)
-        self.bias = nn.Parameter(torch.zeros([output_channels]), requires_grad=True)
+        self.conv = EqualizedModConv2d(dlatent_size=dlatent_size,
+                                       in_channel=in_channel, out_channel=out_channel,
+                                       kernel=kernel, up=up, down=down)
+        self.bias = nn.Parameter(torch.zeros(1, out_channel, 1, 1), requires_grad=True)
 
         self.use_noise = use_noise
         if self.use_noise:
-            self.noise_strength = nn.Parameter(torch.zeros([]), requires_grad=True)
+            self.noise_strength = nn.Parameter(torch.zeros(1), requires_grad=True)
 
     def forward(self, x, dlatents_in_range, noise_input=None):
-        x = self.mod_conv(x, dlatents_in_range)
+        x = self.conv(x, dlatents_in_range)
 
         if self.use_noise:
             if noise_input is None:
-                noise_input = torch.randn(x.size(0), 1, x.size(2), x.size(3), device=x.device, dtype=x.dtype)
-            x += self.noise_strength.view(1, -1, 1, 1) * noise_input
+                batch, _, height, width = x.shape
+                noise_input = x.new_empty(batch, 1, height, width).normal_()
 
-        return apply_bias_act(x, self.bias, act=self.act)
+            x += self.noise_strength * noise_input
+
+        out = fused_leaky_relu(x, self.bias)  # act='lrelu'
+
+        return out
 
 
 class InputBlock(nn.Module):
-    def __init__(self, dlatent_size, number_channels, input_fmaps, output_fmaps, **_kwargs):
+    def __init__(self, dlatent_size, num_channels, in_fmaps, out_fmaps):
         super(InputBlock, self).__init__()
-        self.const = nn.Parameter(torch.randn(1, input_fmaps, 4, 4), requires_grad=True)
+
+        self.const = nn.Parameter(torch.randn(1, in_fmaps, 4, 4), requires_grad=True)
         self.conv = ModConvLayer(dlatent_size=dlatent_size,
-                                 input_channels=input_fmaps,
-                                 output_channels=output_fmaps,
-                                 kernel=3, **_kwargs)
-        self.to_rgb = ModConvLayer(dlatent_size=dlatent_size,
-                                   input_channels=output_fmaps,
-                                   output_channels=number_channels,
-                                   use_noise=False, kernel=1, demodulate=False,
-                                   **_kwargs)
+                                 in_channel=in_fmaps,
+                                 out_channel=out_fmaps,
+                                 kernel=3)
+        self.to_rgb = ToRGB(dlatent_size=dlatent_size,
+                            in_channel=out_fmaps,
+                            num_channels=num_channels)
 
     def forward(self, dlatents_in):
         x = self.const.repeat(dlatents_in.shape[0], 1, 1, 1)
@@ -66,46 +91,28 @@ class GSynthesisBlock(nn.Module):
     Building blocks for main layers
     """
 
-    def __init__(self, dlatent_size, num_channels, res, input_fmaps, output_fmaps, **_kwargs):
+    def __init__(self, dlatent_size, num_channels, res, in_fmaps, out_fmaps):
         super(GSynthesisBlock, self).__init__()
 
         self.res = res
 
         self.conv0_up = ModConvLayer(dlatent_size=dlatent_size,
-                                     input_channels=input_fmaps,
-                                     output_channels=output_fmaps,
-                                     kernel=3, up=True, **_kwargs)
+                                     in_channel=in_fmaps,
+                                     out_channel=out_fmaps,
+                                     kernel=3, up=True)
         self.conv1 = ModConvLayer(dlatent_size=dlatent_size,
-                                  input_channels=output_fmaps,
-                                  output_channels=output_fmaps,
-                                  kernel=3, **_kwargs)
-        self.to_rgb = ModConvLayer(dlatent_size=dlatent_size,
-                                   input_channels=output_fmaps,
-                                   output_channels=num_channels,
-                                   use_noise=False, kernel=1, demodulate=False,
-                                   **_kwargs)
+                                  in_channel=out_fmaps,
+                                  out_channel=out_fmaps,
+                                  kernel=3)
+        self.to_rgb = ToRGB(dlatent_size=dlatent_size,
+                            in_channel=out_fmaps,
+                            num_channels=num_channels)
 
     def forward(self, x, dlatents_in, y):
         x = self.conv0_up(x, dlatents_in[:, self.res * 2 - 5])
         x = self.conv1(x, dlatents_in[:, self.res * 2 - 4])
 
-        y = upscale2d(y)
-        y = self.to_rgb(x, dlatents_in[:, self.res * 2 - 3]) + y
+        # architecture='skip'
+        y = self.to_rgb(x, dlatents_in[:, self.res * 2 - 3], y)
 
         return x, y
-
-
-class GMappingBlock(nn.Module):
-    def __init__(self, input_size, output_size, lrmul, act):
-        super(GMappingBlock, self).__init__()
-
-        self.lrmul = lrmul
-        self.act = act
-
-        self.linear = EqualizedLinear(input_size, output_size, lrmul=lrmul)
-        self.bias = nn.Parameter(torch.zeros(output_size), requires_grad=True)
-
-    def forward(self, x):
-        x = self.linear(x)
-        x = apply_bias_act(x, self.bias, act=self.act, lrmul=self.lrmul)
-        return x
