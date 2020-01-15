@@ -146,6 +146,7 @@ class EqualizedModConv2d(nn.Module):
         self.up = up
         self.down = down
         self.demodulate = demodulate
+        self.kernel = kernel
 
         if up:
             factor = 2
@@ -186,9 +187,9 @@ class EqualizedModConv2d(nn.Module):
 
         if self.up:
             x = x.view(1, batch * in_channel, height, width)
-            weight = weight.view(batch, self.out_channel, in_channel, self.kernel_size, self.kernel_size)
+            weight = weight.view(batch, self.out_channel, in_channel, self.kernel, self.kernel)
             weight = weight.transpose(1, 2).reshape(batch * in_channel, self.out_channel,
-                                                    self.kernel_size, self.kernel_size)
+                                                    self.kernel, self.kernel)
             out = F.conv_transpose2d(x, weight, padding=0, stride=2, groups=batch)
             _, _, height, width = out.shape
             out = out.view(batch, self.out_channel, height, width)
@@ -202,7 +203,7 @@ class EqualizedModConv2d(nn.Module):
             out = out.view(batch, self.out_channel, height, width)
         else:
             x = x.view(1, batch * in_channel, height, width)
-            out = F.conv2d(x, weight, padding=self.padding, groups=batch)
+            out = F.conv2d(x, weight, padding=self.kernel // 2, groups=batch)
             _, _, height, width = out.shape
             out = out.view(batch, self.out_channel, height, width)
 
