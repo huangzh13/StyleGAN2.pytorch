@@ -7,25 +7,26 @@
 -------------------------------------------------
 """
 
-from collections import OrderedDict
 import numpy as np
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
 
-from models.Blocks import GSynthesisBlock, InputBlock, GMappingBlock
+from models.Blocks import GSynthesisBlock, InputBlock
+from models.CustomLayers import EqualizedLinear
 
 
 class GMapping(nn.Module):
 
-    def __init__(self, latent_size=512, dlatent_size=512, dlatent_broadcast=None,
+    def __init__(self, latent_size=512, label_size=0, dlatent_size=512, dlatent_broadcast=None,
                  mapping_layers=8, mapping_fmaps=512, mapping_lrmul=0.01, mapping_nonlinearity='lrelu',
                  normalize_latents=True, **_kwargs):
         """
         Mapping network used in the StyleGAN paper.
 
         :param latent_size: Latent vector(Z) dimensionality.
-        # :param label_size: Label dimensionality, 0 if no labels.
+        :param label_size: Label dimensionality, 0 if no labels.
         :param dlatent_size: Disentangled latent (W) dimensionality.
         :param dlatent_broadcast: Output disentangled latent (W) as [minibatch, dlatent_size]
                                   or [minibatch, dlatent_broadcast, dlatent_size].
@@ -37,7 +38,7 @@ class GMapping(nn.Module):
         :param _kwargs: Ignore unrecognized keyword args.
         """
 
-        super().__init__()
+        super(GMapping, self).__init__()
 
         self.latent_size = latent_size
         self.mapping_fmaps = mapping_fmaps
@@ -46,17 +47,20 @@ class GMapping(nn.Module):
         self.normalize_latents = normalize_latents
 
         # Embed labels and concatenate them with latents.
-        # TODO
+        if label_size:
+            # TODO
+            pass
 
         layers = []
         for layer_idx in range(0, mapping_layers):
             fmaps_in = self.latent_size if layer_idx == 0 else self.mapping_fmaps
             fmaps_out = self.dlatent_size if layer_idx == mapping_layers - 1 else self.mapping_fmaps
-            layers.append(
-                ('dense%d' % layer_idx, GMappingBlock(input_size=fmaps_in, output_size=fmaps_out,
-                                                      lrmul=mapping_lrmul, act=mapping_nonlinearity)))
 
-        # Output.
+            layers.append(
+                ('dense_%d' % layer_idx, EqualizedLinear(in_dim=fmaps_in, out_dim=fmaps_out,
+                                                         lrmul=mapping_lrmul, activation=mapping_nonlinearity)))
+
+        # Output
         self.map = nn.Sequential(OrderedDict(layers))
 
     def forward(self, x):
@@ -70,6 +74,7 @@ class GMapping(nn.Module):
         # Broadcast -> batch_size * dlatent_broadcast * dlatent_size
         if self.dlatent_broadcast is not None:
             x = x.unsqueeze(1).expand(-1, self.dlatent_broadcast, -1)
+
         return x
 
 
@@ -77,8 +82,7 @@ class GSynthesis(nn.Module):
 
     def __init__(self, dlatent_size=512, num_channels=3, resolution=1024,
                  fmap_base=16 << 10, fmap_decay=1.0, fmap_min=1, fmap_max=512,
-                 randomize_noise=True, architecture='skip', nonlinearity='lrelu',
-                 resample_kernel=None, fused_modconv=True, **_kwargs):
+                 randomize_noise=True, architecture='skip', **_kwargs):
         """
 
         Args:
@@ -92,10 +96,9 @@ class GSynthesis(nn.Module):
             randomize_noise: True = randomize noise inputs every time (non-deterministic),
                              False = read noise inputs from variables.
             architecture: Architecture: 'orig', 'skip', 'resnet'.
-            nonlinearity: Activation function: 'relu', 'lrelu', etc.
-            dtype: Data type to use for activations and outputs.
-            resample_kernel: Low-pass filter to apply when resampling activations. None = no filtering.
-            fused_modconv: Implement modulated_conv2d_layer() as a single fused op?
+            # nonlinearity: Activation function: 'relu', 'lrelu', etc.
+            # resample_kernel: Low-pass filter to apply when resampling activations. None = no filtering.
+            # fused_modconv: Implement modulated_conv2d_layer() as a single fused op?
             **_kwargs: Ignore unrecognized keyword args.):
         """
 
@@ -107,22 +110,17 @@ class GSynthesis(nn.Module):
 
         self.architecture = architecture
         self.resolution_log2 = resolution_log2
+        self.randomize_noise = randomize_noise
 
         def nf(stage):
             return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
 
-        if resample_kernel is None:
-            resample_kernel = [1, 3, 3, 1]
-
         # Early layers
-        self.init_block = InputBlock(dlatent_size=dlatent_size, number_channels=num_channels,
-                                     input_fmaps=nf(1), output_fmaps=nf(1), act=nonlinearity,
-                                     fused_modconv=fused_modconv)
-
+        self.init_block = InputBlock(dlatent_size=dlatent_size, num_channels=num_channels,
+                                     in_fmaps=nf(1), out_fmaps=nf(1), use_noise=randomize_noise)
         # Main layers
         blocks = [GSynthesisBlock(dlatent_size=dlatent_size, num_channels=num_channels, res=res,
-                                  input_fmaps=nf(res - 2), output_fmaps=nf(res - 1), act=nonlinearity,
-                                  fused_modconv=fused_modconv)
+                                  in_fmaps=nf(res - 2), out_fmaps=nf(res - 1), use_noise=randomize_noise)
                   for res in range(3, resolution_log2 + 1)]
         self.blocks = nn.ModuleList(blocks)
 
@@ -130,15 +128,17 @@ class GSynthesis(nn.Module):
         """
         Args:
             dlatents_in: Input: Disentangled latents (W) [minibatch, num_layers, dlatent_size].
-
         Returns:
         """
+        # TODO noise input
+
         x, y = self.init_block(dlatents_in)
 
         for block in self.blocks:
             x, y = block(x, dlatents_in, y)
 
         images_out = y
+
         return images_out
 
 
@@ -160,6 +160,12 @@ class Generator(nn.Module):
         """
         super(Generator, self).__init__()
 
+        self.truncation_psi = truncation_psi
+        self.truncation_cutoff = truncation_cutoff
+        self.truncation_psi_val = truncation_psi_val
+        self.truncation_cutoff_val = truncation_cutoff_val
+        self.dlatent_avg_beta = dlatent_avg_beta
+
         self.style_mixing_prob = style_mixing_prob
 
         # Setup components.
@@ -179,7 +185,7 @@ class Generator(nn.Module):
 
         """
         dlatents_in = self.g_mapping(latents_in)
-        # TODO
+        # TODO truncation,style_mixing
         images_out = self.g_synthesis(dlatents_in)
 
         if return_dlatents:

@@ -7,9 +7,6 @@
 -------------------------------------------------
 """
 
-import math
-
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,55 +14,15 @@ import torch.nn.functional as F
 from models.op import upfirdn2d, fused_leaky_relu
 
 
-def apply_bias_act(x, b, act='lrelu', gain=None, lrmul=1):
-    act_layer, def_gain = {'relu': (torch.relu, np.sqrt(2)),
-                           'lrelu': (nn.LeakyReLU(negative_slope=0.2), np.sqrt(2))}[act]
+def make_kernel(k):
+    k = torch.tensor(k, dtype=torch.float32)
 
-    b = b * lrmul
-    # Add bias
-    if len(x.shape) == 4:
-        x += b.view(1, -1, 1, 1)
-    else:
-        x += b.view(1, -1)
-    # Evaluate activation function.
-    x = act_layer(x)
-    # Scale by gain.
-    if gain is None:
-        gain = def_gain
-    if gain != 1:
-        x *= gain
+    if k.ndim == 1:
+        k = k[None, :] * k[:, None]
 
-    return x
+    k /= k.sum()
 
-
-class EqualizedConv2d(nn.Module):
-
-    def __init__(self, in_channel, out_channel, kernel_size, stride=1, padding=0, bias=True):
-        super().__init__()
-
-        self.weight = nn.Parameter(torch.randn(out_channel, in_channel, kernel_size, kernel_size), requires_grad=True)
-
-        self.scale = 1 / math.sqrt(in_channel * kernel_size ** 2)
-
-        self.stride = stride
-        self.padding = padding
-
-        if bias:
-            self.bias = nn.Parameter(torch.zeros(out_channel), requires_grad=True)
-        else:
-            self.bias = None
-
-    def forward(self, x):
-        out = F.conv2d(x, self.weight * self.scale, bias=self.bias,
-                       stride=self.stride, padding=self.padding)
-
-        return out
-
-    def __repr__(self):
-        return (
-            f'{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]},'
-            f' {self.weight.shape[2]}, stride={self.stride}, padding={self.padding})'
-        )
+    return k
 
 
 class EqualizedLinear(nn.Module):
@@ -85,6 +42,7 @@ class EqualizedLinear(nn.Module):
             self.w_mul = lrmul
 
         self.weight = torch.nn.Parameter(torch.randn(out_dim, in_dim) * init_std, requires_grad=True)
+
         if bias:
             self.bias = nn.Parameter(torch.zeros(out_dim).fill_(bias_init), requires_grad=True)
             self.b_mul = lrmul
@@ -94,7 +52,7 @@ class EqualizedLinear(nn.Module):
         self.activation = activation
 
     def forward(self, x):
-        if self.activation:
+        if self.activation == 'lrelu':  # act='lrelu'
             out = F.linear(x, self.weight * self.w_mul)
             out = fused_leaky_relu(out, self.bias * self.b_mul)
         else:
@@ -106,17 +64,6 @@ class EqualizedLinear(nn.Module):
         return (
             f'{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})'
         )
-
-
-def make_kernel(k):
-    k = torch.tensor(k, dtype=torch.float32)
-
-    if k.ndim == 1:
-        k = k[None, :] * k[:, None]
-
-    k /= k.sum()
-
-    return k
 
 
 class Blur(nn.Module):
@@ -190,6 +137,7 @@ class EqualizedModConv2d(nn.Module):
 
         assert not (up and down)
         assert kernel >= 1 and kernel % 2 == 1
+
         if resample_kernel is None:
             resample_kernel = [1, 3, 3, 1]
 

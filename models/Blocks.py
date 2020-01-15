@@ -66,14 +66,14 @@ class ModConvLayer(nn.Module):
 
 
 class InputBlock(nn.Module):
-    def __init__(self, dlatent_size, num_channels, in_fmaps, out_fmaps):
+    def __init__(self, dlatent_size, num_channels, in_fmaps, out_fmaps, use_noise):
         super(InputBlock, self).__init__()
 
         self.const = nn.Parameter(torch.randn(1, in_fmaps, 4, 4), requires_grad=True)
         self.conv = ModConvLayer(dlatent_size=dlatent_size,
                                  in_channel=in_fmaps,
                                  out_channel=out_fmaps,
-                                 kernel=3)
+                                 kernel=3, use_noise=use_noise)
         self.to_rgb = ToRGB(dlatent_size=dlatent_size,
                             in_channel=out_fmaps,
                             num_channels=num_channels)
@@ -91,7 +91,7 @@ class GSynthesisBlock(nn.Module):
     Building blocks for main layers
     """
 
-    def __init__(self, dlatent_size, num_channels, res, in_fmaps, out_fmaps):
+    def __init__(self, dlatent_size, num_channels, res, in_fmaps, out_fmaps, use_noise):
         super(GSynthesisBlock, self).__init__()
 
         self.res = res
@@ -99,11 +99,11 @@ class GSynthesisBlock(nn.Module):
         self.conv0_up = ModConvLayer(dlatent_size=dlatent_size,
                                      in_channel=in_fmaps,
                                      out_channel=out_fmaps,
-                                     kernel=3, up=True)
+                                     kernel=3, up=True, use_noise=use_noise)
         self.conv1 = ModConvLayer(dlatent_size=dlatent_size,
                                   in_channel=out_fmaps,
                                   out_channel=out_fmaps,
-                                  kernel=3)
+                                  kernel=3, use_noise=use_noise)
         self.to_rgb = ToRGB(dlatent_size=dlatent_size,
                             in_channel=out_fmaps,
                             num_channels=num_channels)
