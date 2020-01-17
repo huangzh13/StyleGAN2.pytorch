@@ -9,9 +9,11 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 
 from models.CustomLayers import EqualizedModConv2d, Upsample
-from models.op import fused_leaky_relu
+from op import fused_leaky_relu
 
 
 class ToRGB(nn.Module):
@@ -24,7 +26,8 @@ class ToRGB(nn.Module):
         self.upsample = Upsample(resample_kernel)
         self.conv = EqualizedModConv2d(dlatent_size=dlatent_size, in_channel=in_channel,
                                        out_channel=num_channels, kernel=1, demodulate=False)
-        self.bias = nn.Parameter(torch.zeros(1, num_channels, 1, 1), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(
+            1, num_channels, 1, 1), requires_grad=True)
 
     def forward(self, x, dlatents_in_range, y=None):
         x = self.conv(x, dlatents_in_range)
@@ -44,11 +47,13 @@ class ModConvLayer(nn.Module):
         self.conv = EqualizedModConv2d(dlatent_size=dlatent_size,
                                        in_channel=in_channel, out_channel=out_channel,
                                        kernel=kernel, up=up, down=down)
-        self.bias = nn.Parameter(torch.zeros(1, out_channel, 1, 1), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(
+            1, out_channel, 1, 1), requires_grad=True)
 
         self.use_noise = use_noise
         if self.use_noise:
-            self.noise_strength = nn.Parameter(torch.zeros(1), requires_grad=True)
+            self.noise_strength = nn.Parameter(
+                torch.zeros(1), requires_grad=True)
 
     def forward(self, x, dlatents_in_range, noise_input=None):
         x = self.conv(x, dlatents_in_range)
@@ -60,7 +65,8 @@ class ModConvLayer(nn.Module):
 
             x += self.noise_strength * noise_input
 
-        out = fused_leaky_relu(x, self.bias)  # act='lrelu'
+        # out = fused_leaky_relu(x, self.bias)  # act='lrelu'
+        out = (2 ** 0.5) * F.leaky_relu(x+self.bias, negative_slope=0.2)
 
         return out
 
@@ -69,7 +75,8 @@ class InputBlock(nn.Module):
     def __init__(self, dlatent_size, num_channels, in_fmaps, out_fmaps, use_noise):
         super(InputBlock, self).__init__()
 
-        self.const = nn.Parameter(torch.randn(1, in_fmaps, 4, 4), requires_grad=True)
+        self.const = nn.Parameter(torch.randn(
+            1, in_fmaps, 4, 4), requires_grad=True)
         self.conv = ModConvLayer(dlatent_size=dlatent_size,
                                  in_channel=in_fmaps,
                                  out_channel=out_fmaps,
