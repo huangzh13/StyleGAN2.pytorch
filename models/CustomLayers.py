@@ -62,7 +62,6 @@ class EqualizedLinear(nn.Module):
             out = F.linear(x, self.weight * self.w_mul,
                            bias=self.bias * self.b_mul)
             out = (2 ** 0.5) * F.leaky_relu(out, negative_slope=0.2)
-
         else:
             out = F.linear(x, self.weight * self.w_mul,
                            bias=self.bias * self.b_mul)

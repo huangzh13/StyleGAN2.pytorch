@@ -3,7 +3,6 @@ import os
 import torch
 from torch.autograd import Function
 from torch.utils.cpp_extension import load
-import torch.nn.functional as F
 
 
 module_path = os.path.dirname(__file__)
@@ -40,8 +39,7 @@ class UpFirDn2dBackward(Function):
             g_pad_y0,
             g_pad_y1,
         )
-        grad_input = grad_input.view(
-            in_size[0], in_size[1], in_size[2], in_size[3])
+        grad_input = grad_input.view(in_size[0], in_size[1], in_size[2], in_size[3])
 
         ctx.save_for_backward(kernel)
 
@@ -64,8 +62,7 @@ class UpFirDn2dBackward(Function):
     def backward(ctx, gradgrad_input):
         kernel, = ctx.saved_tensors
 
-        gradgrad_input = gradgrad_input.reshape(-1,
-                                                ctx.in_size[2], ctx.in_size[3], 1)
+        gradgrad_input = gradgrad_input.reshape(-1, ctx.in_size[2], ctx.in_size[3], 1)
 
         gradgrad_out = upfirdn2d_op.upfirdn2d(
             gradgrad_input,
@@ -152,47 +149,39 @@ def upfirdn2d(input, kernel, up=1, down=1, pad=(0, 0)):
     return out
 
 
-def upfirdn2d_native(x, kernel, factor=2, padx0=0, padx1=0, pady0=0, pady1=0):
-    kernelH, kernelW = kernel.shape
+def upfirdn2d_native(
+    input, kernel, up_x, up_y, down_x, down_y, pad_x0, pad_x1, pad_y0, pad_y1
+):
+    _, in_h, in_w, minor = input.shape
+    kernel_h, kernel_w = kernel.shape
 
-    y = x.clone()
-    # N C H W ---> N*C H W 1
-    y = y.reshape([-1, x.shape[2], x.shape[3], 1])
+    out = input.view(-1, in_h, 1, in_w, 1, minor)
+    out = F.pad(out, [0, 0, 0, up_x - 1, 0, 0, 0, up_y - 1])
+    out = out.view(-1, in_h * up_y, in_w * up_x, minor)
 
-    inC, inH, inW = x.shape[1:]
-    # step 1: upfirdn2d
+    out = F.pad(
+        out, [0, 0, max(pad_x0, 0), max(pad_x1, 0), max(pad_y0, 0), max(pad_y1, 0)]
+    )
+    out = out[
+        :,
+        max(-pad_y0, 0) : out.shape[1] - max(-pad_y1, 0),
+        max(-pad_x0, 0) : out.shape[2] - max(-pad_x1, 0),
+        :,
+    ]
 
-    # 1) Upsample
-    y = torch.reshape(y, (-1, inH, 1, inW, 1, 1))
-    y = F.pad(y, (0, 0, factor - 1, 0, 0,
-                  0, factor - 1, 0, 0, 0, 0, 0))
-    y = torch.reshape(y, (-1, 1, inH * factor, inW * factor))
+    out = out.permute(0, 3, 1, 2)
+    out = out.reshape(
+        [-1, 1, in_h * up_y + pad_y0 + pad_y1, in_w * up_x + pad_x0 + pad_x1]
+    )
+    w = torch.flip(kernel, [0, 1]).view(1, 1, kernel_h, kernel_w)
+    out = F.conv2d(out, w)
+    out = out.reshape(
+        -1,
+        minor,
+        in_h * up_y + pad_y0 + pad_y1 - kernel_h + 1,
+        in_w * up_x + pad_x0 + pad_x1 - kernel_w + 1,
+    )
+    out = out.permute(0, 2, 3, 1)
 
-    # 2) Pad (crop if negative).
-    y = F.pad(y, (0, 0,
-                  max(pady0, 0), max(pady1, 0),
-                  max(padx0, 0), max(padx1, 0),
-                  0, 0
-                  ))
-    y = y[:,
-          max(-pady0, 0): y.shape[1] - max(-pady1, 0),
-          max(-padx0, 0): y.shape[2] - max(-padx1, 0),
-          :]
+    return out[:, ::down_y, ::down_x, :]
 
-    # 3) Convolve with filter.
-    y = y.permute(0, 3, 1, 2)  # N*C H W 1 --> N*C 1 H W
-    y = y.reshape(-1, 1, inH * factor + pady0 +
-                  pady1, inW * factor + padx0 + padx1)
-    y = F.conv2d(y, kernel)
-    y = y.view(-1, 1,
-               inH * factor + pady0 + pady1 - kernelH + 1,
-               inW * factor + padx0 + padx1 - kernelW + 1)
-
-    # 4) Downsample (throw away pixels).
-    if inH * factor != y.shape[1]:
-        y = F.interpolate(y, size=(inH * factor,
-                                   inW * factor), mode='bilinear')
-    y = y.permute(0, 2, 3, 1)
-    y = y.reshape(-1, inC, inH * factor, inW * factor)
-
-    return y
