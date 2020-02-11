@@ -61,7 +61,7 @@ def convert_modconv(weights, source_name, target_name, flip=False):
         'conv.mod.weight': mod_weight.transpose((1, 0)),
         'conv.mod.bias': mod_bias + 1,
         'noise_strength': np.array([noise]),
-        'bias': bias.reshape((1, -1, 1, 1)),
+        'bias': bias,
     }
 
     dic_torch = {}

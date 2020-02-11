@@ -3,7 +3,7 @@
    File Name:    convert.py.py
    Author:       Zhonghao Huang
    Date:         2019/12/13
-   Description:  M
+   Description:  
 -------------------------------------------------
 """
 
@@ -52,16 +52,11 @@ def key_translate(k):
     return k
 
 
-def main():
-    pass
-
-
 if __name__ == '__main__':
     input_file = './weights/stylegan2-ffhq-config-f-torch.pt'
 
     state_G, state_D, state_Gs, dlatent_avg = torch.load(input_file)
-    param_dict = {key_translate(k): weight_translate(k, v)
-                  for k, v in state_Gs.items()}
+    param_dict = {key_translate(k): weight_translate(k, v) for k, v in state_Gs.items()}
 
     gen = Generator()
 
@@ -79,7 +74,6 @@ if __name__ == '__main__':
         elif sds != pds:
             print("mismatch!", k, pds, sds)
 
-    # needed for the blur kernels
-    gen.load_state_dict(param_dict, strict=False)
+    gen.load_state_dict(param_dict, strict=False)  # needed for the blur kernels
     torch.save(gen.state_dict(), 'ffhq_gen.pth')
     print('Done.')
