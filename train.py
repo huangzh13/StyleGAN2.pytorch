@@ -61,7 +61,7 @@ def convert_modconv(weights, source_name, target_name, flip=False):
         'conv.mod.weight': mod_weight.transpose((1, 0)),
         'conv.mod.bias': mod_bias + 1,
         'noise_strength': np.array([noise]),
-        'bias': bias,
+        'bias': bias.reshape((-1, 1, 1)),
     }
 
     dic_torch = {}
@@ -159,7 +159,7 @@ if __name__ == '__main__':
     state_dict = fill_statedict(state_dict, state_Gs.vars, 1024)
     gen.load_state_dict(state_dict)
 
-    torch.save(state_dict,  './weights/stylegan2-ffhq-config-f.pth')
+    torch.save(state_dict, './weights/stylegan2-ffhq-config-f.pth')
 
     device = 'cuda:3'
 
