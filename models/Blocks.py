@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
+from op import fused_leaky_relu
 from models.CustomLayers import EqualizedModConv2d, Upsample
 
 
@@ -27,8 +27,7 @@ class ToRGB(nn.Module):
         self.upsample = Upsample(resample_kernel)
         self.conv = EqualizedModConv2d(dlatent_size=dlatent_size, in_channel=in_channel,
                                        out_channel=num_channels, kernel=1, demodulate=False)
-        self.bias = nn.Parameter(torch.zeros(
-            1, num_channels, 1, 1), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(1, num_channels, 1, 1), requires_grad=True)
 
     def forward(self, x, dlatents_in_range, y=None):
         x = self.conv(x, dlatents_in_range)
@@ -48,7 +47,7 @@ class ModConvLayer(nn.Module):
         self.conv = EqualizedModConv2d(dlatent_size=dlatent_size,
                                        in_channel=in_channel, out_channel=out_channel,
                                        kernel=kernel, up=up, down=down)
-        self.bias = nn.Parameter(torch.zeros((out_channel,1,1)), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(out_channel), requires_grad=True)
 
         self.use_noise = use_noise
         if self.use_noise:
@@ -65,8 +64,7 @@ class ModConvLayer(nn.Module):
 
             x += self.noise_strength * noise_input
 
-        # out = fused_leaky_relu(x, self.bias)  # act='lrelu'
-        out = math.sqrt(2)*F.leaky_relu(x+self.bias, negative_slope=0.2)
+        out = fused_leaky_relu(x, self.bias)  # act='lrelu'
 
         return out
 

@@ -1,17 +1,17 @@
-from models.GAN import Generator
-
 import numpy as np
+
 import torch
 from torchvision import utils
 
-if __name__ == '__main__':
+from models.GAN import Generator
 
+if __name__ == '__main__':
     gen = Generator()
-    gen.load_state_dict(torch.load('stylegan2-ffhq-config-f.pt')['g_ema'])
+    gen.load_state_dict(torch.load('./weights/stylegan2-ffhq-config-f.pt')['g_ema'])
 
     device = 'cuda'
 
-    batch_size = {256: 16, 512: 9, 1024: 4}
+    batch_size = {256: 16, 512: 9, 1024: 9}
     n_sample = batch_size.get(1024, 25)
 
     g = gen.to(device)
