@@ -1,3 +1,12 @@
+"""
+-------------------------------------------------
+   File Name:    fused_act.py
+   Date:         2020/02/13
+   Description:  Copy from: 
+                 https://github.com/rosinality/stylegan2-pytorch
+-------------------------------------------------
+"""
+
 import os
 
 import torch

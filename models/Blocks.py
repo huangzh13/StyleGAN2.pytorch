@@ -3,7 +3,10 @@
    File Name:    Blocks.py
    Author:       Zhonghao Huang
    Date:         2019/12/13
-   Description:  
+   Description:  Modified from:
+                 https://github.com/akanimax/pro_gan_pytorch
+                 https://github.com/lernapparat/lernapparat
+                 https://github.com/NVlabs/stylegan
 -------------------------------------------------
 """
 
