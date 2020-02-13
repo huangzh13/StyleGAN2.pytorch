@@ -7,9 +7,9 @@ from torchvision import utils
 if __name__ == '__main__':
 
     gen = Generator()
-    gen.load_state_dict(torch.load('./weights/stylegan2-ffhq-config-f.pth'))
+    gen.load_state_dict(torch.load('stylegan2-ffhq-config-f.pt')['g_ema'])
 
-    device = 'cuda:3'
+    device = 'cuda'
 
     batch_size = {256: 16, 512: 9, 1024: 4}
     n_sample = batch_size.get(1024, 25)

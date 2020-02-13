@@ -121,9 +121,8 @@ class EqualizedLinear(nn.Module):
 
     def forward(self, x):
         if self.activation == 'lrelu':  # act='lrelu'
-            out = F.linear(x, self.weight * self.w_mul,
-                           bias=self.bias * self.b_mul)
-            out = math.sqrt(2)*F.leaky_relu(out, negative_slope=0.2)
+            out = F.linear(x, self.weight * self.w_mul)
+            out = fused_leaky_relu(out, self.bias * self.b_mul)
         else:
             out = F.linear(x, self.weight * self.w_mul,
                            bias=self.bias * self.b_mul)
