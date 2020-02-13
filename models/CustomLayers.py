@@ -7,14 +7,11 @@
 -------------------------------------------------
 """
 
-import math
-import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from op import fused_leaky_relu, upfirdn2d
+from models.op import fused_leaky_relu, upfirdn2d
 
 
 def make_kernel(k):

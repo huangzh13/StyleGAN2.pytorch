@@ -7,13 +7,10 @@
 -------------------------------------------------
 """
 
-import math
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from op import fused_leaky_relu
+from models.op import fused_leaky_relu
 from models.CustomLayers import EqualizedModConv2d, Upsample
 
 
