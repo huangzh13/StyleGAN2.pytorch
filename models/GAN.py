@@ -176,6 +176,12 @@ class Generator(nn.Module):
         self.g_mapping = GMapping(latent_size, dlatent_size, dlatent_broadcast=self.num_layers, **_kwargs)
         self.g_synthesis = GSynthesis(resolution=resolution, **_kwargs)
 
+        # if truncation_psi > 0:
+        #     self.truncation = Truncation(avg_latent=torch.zeros(dlatent_size),
+        #                                  max_layer=truncation_cutoff,
+        #                                  threshold=truncation_psi,
+        #                                  beta=dlatent_avg_beta)
+
     def forward(self, latents_in, labels_in=None, return_dlatents=False):
         """
 
@@ -189,6 +195,7 @@ class Generator(nn.Module):
         """
         dlatents_in = self.g_mapping(latents_in)
         # TODO truncation,style_mixing
+
         images_out = self.g_synthesis(dlatents_in)
 
         if return_dlatents:
