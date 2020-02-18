@@ -1,6 +1,6 @@
 # StyleGAN2.pytorch (Work In Progress)
 
-## \[:star: New :star:\] Please head over to [StyleGAN.pytorch](https://github.com/huangzh13/StyleGAN.pytorch) for my stylegan pytorch implementation.
+## \[:star:\] Please head over to [StyleGAN.pytorch](https://github.com/huangzh13/StyleGAN.pytorch) for my stylegan pytorch implementation.
 
 This repository contains the unofficial PyTorch implementation of the following paper:
 
